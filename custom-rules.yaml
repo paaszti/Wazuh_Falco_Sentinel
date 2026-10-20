@@ -1,101 +1,115 @@
-custom_rules.yaml: |-
-   - list: shell_binaries
-      items: [bash, sh, zsh, csh, ksh, tcsh, ash, dash, fish]
+- list: shell_binaries
+  items: [bash, sh, zsh, csh, ksh, tcsh, ash, dash, fish]
 
-    - macro: spawned_process
-      condition: evt.type=execve
+- macro: spawned_process
+  condition: evt.type=execve
 
-    - macro: container
-      condition: container.id != host
+- macro: container
+  condition: container.id != host
 
-    - list: monitored_ns
-      items: [dvwa]
+- list: monitored_ns
+  items: [dvwa]
 
-    - macro: in_monitored_ns
-      condition: (k8smeta.ns.name in (monitored_ns))
+- macro: in_monitored_ns
+  condition: (k8smeta.ns.name in (monitored_ns))
 
-    - list: not_monitored_ns
-      items: [falco, wazuh, kube-system]
+- list: not_monitored_ns
+  items: [falco, wazuh, kube-system]
 
-    - macro: not_in_monitored_ns
-      condition: not (k8smeta.ns.name in (not_monitored_ns))
+- macro: not_in_monitored_ns
+  condition: not (k8smeta.ns.name in (not_monitored_ns))
 
-    - rule: Web Process Local Network Outbound
-      desc: Unwated outband traffic detected
-      condition: >
-        evt.type = connect and evt.dir = < and
-        fd.sockfamily = ip and container and
-        proc.name in (apache2, httpd, php, php-fpm) and
-        not fd.port in (80, 443, 3306, 5432)
-      output: "Unwanted outbound traffic detected (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline dest_ip=%fd.sip dest_port=%fd.sport)"
-      priority: CRITICAL
-      tags: [container_escape, mitre_command_and_control, network]
+- rule: Web Process Local Network Outbound
+  desc: Unwanted outbound traffic detected
+  condition: >
+    evt.type = connect and evt.dir = < and
+    fd.sockfamily = ip and container and
+    proc.name in (apache2, httpd, php, php-fpm) and
+    not fd.port in (80, 443, 3306, 5432)
+  output: "Unwanted outbound traffic detected (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline dest_ip=%fd.sip dest_port=%fd.sport)"
+  priority: CRITICAL
+  tags: [container_escape, mitre_command_and_control, network]
 
-    - rule: Listen on Suspicious Port
-      desc: Suspicious port opened
-      condition: container and evt.type=listen and not fd.lport in (80, 443, 8080, 3000, 5432, 3306) and in_monitored_ns
-      output: Port opened (hostname=%evt.hostname user=%user.name port=%fd.lport process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
-      priority: WARNING
-      tags: [network, suspicious]
+- rule: Listen on Suspicious Port
+  desc: Suspicious port opened
+  condition: container and evt.type=listen and not fd.lport in (80, 443, 8080, 3000, 5432, 3306) and in_monitored_ns
+  output: Port opened (hostname=%evt.hostname user=%user.name port=%fd.lport process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
+  priority: WARNING
+  tags: [network, suspicious]
 
-    - rule: Sensitive Mount Operation
-      desc: Mount command detected
-      condition: container and evt.type=mount and in_monitored_ns
-      output: Mount detection (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
-      priority: CRITICAL
-      tags: [container_escape, privilege_escalation]
+- rule: Sensitive Mount Operation
+  desc: Mount command detected
+  condition: container and evt.type=mount and in_monitored_ns
+  output: Mount detection (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
+  priority: CRITICAL
+  tags: [container_escape, privilege_escalation]
 
-    - rule: Suspicious SU Usage
-      desc: Suspicious SU usage detected
-      condition: >
-        container and
-        spawned_process and
-        proc.name = "su" and
-        (proc.args = "" or
-         proc.args = "-" or
-         proc.args contains "root") and in_monitored_ns
-      output: Suspicious su usage to root (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
-      priority: CRITICAL
-      tags: [privilege_escalation, suspicious_activity]
+- rule: Suspicious SU Usage
+  desc: Suspicious SU usage detected
+  condition: >
+    container and
+    spawned_process and
+    proc.name = "su" and
+    (proc.args = "" or
+     proc.args = "-" or
+     proc.args contains "root") and in_monitored_ns
+  output: Suspicious su usage to root (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
+  priority: CRITICAL
+  tags: [privilege_escalation, suspicious_activity]
 
-    - rule: Reconnaissance Command df
-      desc: Detects the use of df command (disk space checking)
-      condition: >
-        spawned_process and
-        proc.name = "df" and
-        (proc.args contains "-h" or proc.args contains "-a") and in_monitored_ns
-      output: Detected df command - filesystem reconnaissance (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
-      priority: NOTICE
-      tags: [reconnaissance, mitre_discovery, T1083]
+- rule: Reconnaissance Command df
+  desc: Detects the use of df command (disk space checking)
+  condition: >
+    spawned_process and
+    proc.name = "df" and
+    (proc.args contains "-h" or proc.args contains "-a") and in_monitored_ns
+  output: Detected df command - filesystem reconnaissance (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
+  priority: NOTICE
+  tags: [reconnaissance, mitre_discovery, T1083]
 
-    - rule: Reconnaissance Command hostname
-      desc: Detects the use of hostname command to check IP addresses
-      condition: >
-        spawned_process and
-        proc.name = "hostname" and
-        (proc.args contains "-I" or proc.args contains "-i") and in_monitored_ns
-      output: Detected hostname command - network reconnaissance (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
-      priority: NOTICE
-      tags: [reconnaissance, mitre_discovery, T1016]
+- rule: Reconnaissance Command hostname
+  desc: Detects the use of hostname command to check IP addresses
+  condition: >
+    spawned_process and
+    proc.name = "hostname" and
+    (proc.args contains "-I" or proc.args contains "-i") and in_monitored_ns
+  output: Detected hostname command - network reconnaissance (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
+  priority: NOTICE
+  tags: [reconnaissance, mitre_discovery, T1016]
 
-    - rule: Reconnaissance Command ps
-      desc: Detects the use of ps command (process listing)
-      condition: >
-        spawned_process and
-        proc.name = "ps" and
-        (proc.args contains "aux" or proc.args contains "-ef") and in_monitored_ns
-      output: Detected ps command (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
-      priority: NOTICE
-      tags: [reconnaissance, mitre_discovery, T1057]
+- rule: Reconnaissance Command ps
+  desc: Detects the use of ps command (process listing)
+  condition: >
+    spawned_process and
+    proc.name = "ps" and
+    (proc.args contains "aux" or proc.args contains "-ef") and in_monitored_ns
+  output: Detected ps command (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
+  priority: NOTICE
+  tags: [reconnaissance, mitre_discovery, T1057]
 
-    - rule: Terminal Shell in Container
-      desc: A shell was spawned in a container with an attached terminal
-      condition: >
-        spawned_process and
-        container and
-        proc.name in (shell_binaries) and
-        proc.tty != 0 and in_monitored_ns
-      output: Interactive shell spawned in container with terminal (hostname=%evt.hostname user=%user.name process=%proc.name shell=%proc.name parent=%proc.pname cmdline=%proc.cmdline terminal=%proc.tty container=%container.id)
-      priority: NOTICE
-      tags: [shell, container, terminal]
+- rule: Terminal Shell in Container
+  desc: A shell was spawned in a container with an attached terminal
+  condition: >
+    spawned_process and
+    container and
+    proc.name in (shell_binaries) and
+    proc.tty != 0 and in_monitored_ns
+  output: Interactive shell spawned in container with terminal (hostname=%evt.hostname user=%user.name process=%proc.name shell=%proc.name parent=%proc.pname cmdline=%proc.cmdline terminal=%proc.tty container=%container.id)
+  priority: NOTICE
+  tags: [shell, container, terminal]
 
+- rule: Container Kernel Module Tampering (Syscall Level)
+  desc: >
+    Detects attempts to load (init_module, finit_module) or unload (delete_module)
+    a kernel module from within a container, regardless of the binary used (e.g., busybox insmod).
+  condition: evt.type in (init_module, finit_module, delete_module) and container
+  output: Detected kernel module tampering from within a container! (action=%evt.type user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline binary=%proc.name ppid=%proc.ppid)
+  priority: CRITICAL
+  tags: [container_escape, mitre_privilege_escalation, mitre_defense_evasion, kernel]
+
+- rule: Container Kernel Module Enumeration (lsmod)
+  desc: Detects attempts to read the list of loaded kernel modules (/proc/modules) from within a container (Discovery phase / lsmod).
+  condition: evt.type in (open, openat, openat2) and evt.dir = < and container and fd.name = "/proc/modules" and not proc.name in (kubelet, containerd, docker)
+  output: Detected kernel module enumeration (lsmod / /proc/modules) (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline file=%fd.name binary=%proc.name)
+  priority: WARNING
+  tags: [mitre_discovery, recon, kernel]
