@@ -57,13 +57,10 @@
   priority: CRITICAL
   tags: [privilege_escalation, suspicious_activity]
 
-- rule: Reconnaissance Command df
-  desc: Detects the use of df command (disk space checking)
-  condition: >
-    spawned_process and
-    proc.name = "df" and
-    (proc.args contains "-h" or proc.args contains "-a") and in_monitored_ns
-  output: Detected df command - filesystem reconnaissance (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
+- rule: Container Filesystem Reconnaissance (statfs)
+  desc: Detects the use of statfs or fstatfs syscalls to query disk space and mounts.
+  condition: evt.type in (open, openat, openat2) and evt.dir = < and container and in_monitored_ns and fd.name in ("/proc/mounts", "/proc/self/mountinfo", "/etc/mtab") 
+  output: Filesystem reconnaissance detected via statfs (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline binary=%proc.name syscall=%evt.type)
   priority: NOTICE
   tags: [reconnaissance, mitre_discovery, T1083]
 
@@ -77,15 +74,12 @@
   priority: NOTICE
   tags: [reconnaissance, mitre_discovery, T1016]
 
-- rule: Reconnaissance Command ps
-  desc: Detects the use of ps command (process listing)
-  condition: >
-    spawned_process and
-    proc.name = "ps" and
-    (proc.args contains "aux" or proc.args contains "-ef") and in_monitored_ns
-  output: Detected ps command (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
+- rule: Container Process Enumeration (Procfs)
+  desc: Detects attempts to enumerate running processes by reading /proc/ directories.
+  condition: evt.type in (open, openat, openat2) and evt.dir = < and container and in_monitored_ns and (fd.name = "/proc" or fd.name = "/proc/")
+  output: Process enumeration detected via procfs read (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline binary=%proc.name file=%fd.name)
   priority: NOTICE
-  tags: [reconnaissance, mitre_discovery, T1057]
+  tags: [reconnaissance, mitre_discovery, T1057]    
 
 - rule: Terminal Shell in Container
   desc: A shell was spawned in a container with an attached terminal
@@ -121,3 +115,9 @@
   priority: CRITICAL
   tags: [container_escape, process_injection, mitre_privilege_escalation, mitre_defense_evasion]
 
+- rule: Container Payload Staging (chmod)
+  desc: Detects attempts to modify file permissions to make them executable.
+  condition: evt.type in (chmod, fchmod, fchmodat) and evt.dir = < and container and in_monitored_ns and evt.arg.mode contains "S_IX"
+  output: Executable payload staging detected! File made executable via syscall (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline file=%evt.arg.filename mode=%evt.arg.mode)
+  priority: CRITICAL
+  tags: [mitre_defense_evasion, mitre_execution, file_modification]
