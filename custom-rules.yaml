@@ -113,3 +113,11 @@
   output: Detected kernel module enumeration (lsmod / /proc/modules) (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline file=%fd.name binary=%proc.name)
   priority: WARNING
   tags: [mitre_discovery, recon, kernel]
+
+- rule: Container Process Injection (ptrace)
+  desc: Detects the use of the ptrace system call from within a container. 
+  condition: evt.type = ptrace and evt.arg.request = PTRACE_ATTACH and container
+  output: Process injection attempt detected via ptrace (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline binary=%proc.name ppid=%proc.ppid)
+  priority: CRITICAL
+  tags: [container_escape, process_injection, mitre_privilege_escalation, mitre_defense_evasion]
+
