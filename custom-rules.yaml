@@ -1,24 +1,46 @@
-customRules:
-  custom_rules.yaml: |-
-    - list: shell_binaries
+custom_rules.yaml: |-
+   - list: shell_binaries
       items: [bash, sh, zsh, csh, ksh, tcsh, ash, dash, fish]
 
     - macro: spawned_process
-      condition: evt.type=execve and evt.dir=<
+      condition: evt.type=execve
 
     - macro: container
       condition: container.id != host
 
+    - list: monitored_ns
+      items: [dvwa]
+
+    - macro: in_monitored_ns
+      condition: (k8smeta.ns.name in (monitored_ns))
+
+    - list: not_monitored_ns
+      items: [falco, wazuh, kube-system]
+
+    - macro: not_in_monitored_ns
+      condition: not (k8smeta.ns.name in (not_monitored_ns))
+
+    - rule: Web Process Local Network Outbound
+      desc: Unwated outband traffic detected
+      condition: >
+        evt.type = connect and evt.dir = < and
+        fd.sockfamily = ip and container and
+        proc.name in (apache2, httpd, php, php-fpm) and
+        not fd.port in (80, 443, 3306, 5432)
+      output: "Unwanted outbound traffic detected (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline dest_ip=%fd.sip dest_port=%fd.sport)"
+      priority: CRITICAL
+      tags: [container_escape, mitre_command_and_control, network]
+
     - rule: Listen on Suspicious Port
       desc: Suspicious port opened
-      condition: container and evt.type=listen and not fd.lport in (80, 443, 8080, 3000, 5432, 3306) and k8smeta.ns.name=dvwa
+      condition: container and evt.type=listen and not fd.lport in (80, 443, 8080, 3000, 5432, 3306) and in_monitored_ns
       output: Port opened (hostname=%evt.hostname user=%user.name port=%fd.lport process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
       priority: WARNING
       tags: [network, suspicious]
 
     - rule: Sensitive Mount Operation
       desc: Mount command detected
-      condition: container and evt.type=mount
+      condition: container and evt.type=mount and in_monitored_ns
       output: Mount detection (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
       priority: CRITICAL
       tags: [container_escape, privilege_escalation]
@@ -31,7 +53,7 @@ customRules:
         proc.name = "su" and
         (proc.args = "" or
          proc.args = "-" or
-         proc.args contains "root")
+         proc.args contains "root") and in_monitored_ns
       output: Suspicious su usage to root (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
       priority: CRITICAL
       tags: [privilege_escalation, suspicious_activity]
@@ -41,7 +63,7 @@ customRules:
       condition: >
         spawned_process and
         proc.name = "df" and
-        (proc.args contains "-h" or proc.args contains "-a")
+        (proc.args contains "-h" or proc.args contains "-a") and in_monitored_ns
       output: Detected df command - filesystem reconnaissance (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
       priority: NOTICE
       tags: [reconnaissance, mitre_discovery, T1083]
@@ -51,7 +73,7 @@ customRules:
       condition: >
         spawned_process and
         proc.name = "hostname" and
-        (proc.args contains "-I" or proc.args contains "-i")
+        (proc.args contains "-I" or proc.args contains "-i") and in_monitored_ns
       output: Detected hostname command - network reconnaissance (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
       priority: NOTICE
       tags: [reconnaissance, mitre_discovery, T1016]
@@ -61,7 +83,7 @@ customRules:
       condition: >
         spawned_process and
         proc.name = "ps" and
-        (proc.args contains "aux" or proc.args contains "-ef")
+        (proc.args contains "aux" or proc.args contains "-ef") and in_monitored_ns
       output: Detected ps command (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
       priority: NOTICE
       tags: [reconnaissance, mitre_discovery, T1057]
@@ -72,7 +94,8 @@ customRules:
         spawned_process and
         container and
         proc.name in (shell_binaries) and
-        proc.tty != 0
-      output: Interactive shell spawned in container with terminal (hostname=%evt.hostname user=%user.name process=%proc.name shell=%proc.name parent=%proc.pname cmdline=%proc.cmdline terminal=%proc.tty container=%container.name)
+        proc.tty != 0 and in_monitored_ns
+      output: Interactive shell spawned in container with terminal (hostname=%evt.hostname user=%user.name process=%proc.name shell=%proc.name parent=%proc.pname cmdline=%proc.cmdline terminal=%proc.tty container=%container.id)
       priority: NOTICE
       tags: [shell, container, terminal]
+
