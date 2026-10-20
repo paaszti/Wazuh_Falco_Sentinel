@@ -20,9 +20,10 @@ spec:
       labels:
         app: dvwa
     spec:
+      hostPID: true
       containers:
       - name: dvwa
-        image: docker.io/library/mydvwa:v1
+        image: docker.io/library/dvwa:test
         imagePullPolicy: Never
         ports:
         - containerPort: 80
