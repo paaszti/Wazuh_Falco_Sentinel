@@ -121,3 +121,11 @@
   output: Executable payload staging detected! File made executable via syscall (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline file=%evt.arg.filename mode=%evt.arg.mode)
   priority: CRITICAL
   tags: [mitre_defense_evasion, mitre_execution, file_modification]
+
+- rule: Network reconnaissance detected
+  desc: Detection of network reconnaissance (often used by 'ip a' or network recon)
+  condition: evt.type in (open, openat, openat2) and evt.dir = < and container and in_monitored_ns and ((fd.directory = "/etc" and fd.filename = "hosts") or (fd.directory = "/proc/net" and fd.filename in ("route", "arp", "fib_trie", "dev")))
+  output: Possible network reconnaissance detected (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline binary=%proc.name domain=%evt.arg.domain)
+  priority: WARNING
+  tags: [mitre_discovery, network_recon, syscall_level]
+
