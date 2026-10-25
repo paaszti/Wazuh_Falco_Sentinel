@@ -7,7 +7,7 @@ data:
     [log_collection_settings]
        [log_collection_settings.stdout]
           enabled = true
-          exclude_namespaces = ["kube-system", "calico-system", "gatekeeper-system", "default", "falco", "kube-public", "ingress", "metallb-system", "azure-arc"]
+          exclude_namespaces = ["kube-system", "calico-system", "gatekeeper-system", "default", "falco", "kube-public", "ingress", "metallb-system", "azure-arc", "dvwa"]
        [log_collection_settings.stderr]
           enabled = false
        [log_collection_settings.filter_using_annotations]

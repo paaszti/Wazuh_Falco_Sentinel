@@ -59,8 +59,8 @@
 
 - rule: Container Filesystem Reconnaissance (statfs)
   desc: Detects the use of statfs or fstatfs syscalls to query disk space and mounts.
-  condition: evt.type in (open, openat, openat2) and evt.dir = < and container and in_monitored_ns and fd.name in ("/proc/mounts", "/proc/self/mountinfo", "/etc/mtab") 
-  output: Filesystem reconnaissance detected via statfs (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline binary=%proc.name syscall=%evt.type)
+  condition: evt.type in (open, openat, openat2) and evt.dir = < and fd.num >= 0 and container and in_monitored_ns and fd.name in ("/proc/mounts", "/proc/self/mountinfo", "/etc/mtab") 
+  output: Filesystem reconnaissance detected via statfs (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline binary=%proc.name file=%fd.name res=%evt.res syscall=%evt.type)
   priority: NOTICE
   tags: [reconnaissance, mitre_discovery, T1083]
 
@@ -76,8 +76,8 @@
 
 - rule: Container Process Enumeration (Procfs)
   desc: Detects attempts to enumerate running processes by reading /proc/ directories.
-  condition: evt.type in (open, openat, openat2) and evt.dir = < and container and in_monitored_ns and (fd.name = "/proc" or fd.name = "/proc/")
-  output: Process enumeration detected via procfs read (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline binary=%proc.name file=%fd.name)
+  condition: evt.type in (open, openat, openat2) and evt.dir = < and fd.num >= 0 and container and in_monitored_ns and (fd.name = "/proc" or fd.name = "/proc/")
+  output: Process enumeration detected via procfs read (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline binary=%proc.name file=%fd.name res=%evt.res)
   priority: NOTICE
   tags: [reconnaissance, mitre_discovery, T1057]    
 
