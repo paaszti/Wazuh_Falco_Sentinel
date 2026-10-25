@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../local-env
+
+images:
+  - name: wazuh/wazuh-manager
+    newTag: 4.14.9
+  - name: wazuh/wazuh-indexer
+    newTag: 4.14.9
+  - name: wazuh/wazuh-dashboard
+    newTag: 4.14.9
+
+configMapGenerator:
+  - name: wazuh-custom-rules
+    namespace: wazuh
+    files:
+      - falco-rules.xml
+
+patches:
+  - path: resources.yaml
+  - path: rules-mount.yaml
+  - path: worker-sidecar.yaml
+  - path: azure-log-filter.yaml
+

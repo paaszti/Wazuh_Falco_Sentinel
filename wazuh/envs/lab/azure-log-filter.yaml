@@ -1,0 +1,38 @@
+# Pod-TEMPLATE annotations (not StatefulSet metadata) - these are the ones
+# Container Insights reads. Needs [log_collection_settings.filter_using_annotations]
+# enabled = true in the container-azm-ms-agentconfig ConfigMap.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: wazuh-manager-worker, namespace: wazuh}
+spec:
+  template:
+    metadata:
+      annotations:
+        fluentbit.io/exclude_wazuh-manager: "true" 
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: wazuh-manager-master, namespace: wazuh}
+spec:
+  template:
+    metadata:
+      annotations:
+        fluentbit.io/exclude: "true"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: wazuh-indexer, namespace: wazuh}
+spec:
+  template:
+    metadata:
+      annotations:
+        fluentbit.io/exclude: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: wazuh-dashboard, namespace: wazuh}
+spec:
+  template:
+    metadata:
+      annotations:
+        fluentbit.io/exclude: "true"

@@ -1,0 +1,24 @@
+# alerts-forwarder sidecar: prints alerts.json to stdout, so Container Insights
+# (ContainerLogV2) ships it to Log Analytics / Sentinel.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: wazuh-manager-worker, namespace: wazuh}
+spec:
+  template:
+    spec:
+      containers:
+        - name: alerts-forwarder
+          image: busybox:1.37.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - while [ ! -f /var/ossec/logs/alerts/alerts.json ]; do sleep 2; done; exec tail -F /var/ossec/logs/alerts/alerts.json
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits:   {cpu: 100m, memory: 64Mi}
+          volumeMounts:
+            - name: wazuh-manager-worker
+              mountPath: /var/ossec/logs
+              subPath: wazuh/var/ossec/logs
+              readOnly: true
