@@ -1,0 +1,17 @@
+kind: ConfigMap
+apiVersion: v1
+data:
+  schema-version: "v1"
+  config-version: "ver1"
+  log-data-collection-settings: |-
+    [log_collection_settings]
+       [log_collection_settings.stdout]
+          enabled = true
+          exclude_namespaces = ["kube-system", "calico-system", "gatekeeper-system", "default", "falco", "kube-public", "ingress", "metallb-system", "azure-arc"]
+       [log_collection_settings.stderr]
+          enabled = false
+       [log_collection_settings.filter_using_annotations]
+          enabled = true
+metadata:
+  name: container-azm-ms-agentconfig
+  namespace: kube-system
