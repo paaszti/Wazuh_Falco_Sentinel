@@ -1,131 +1,229 @@
-- list: shell_binaries
-  items: [bash, sh, zsh, csh, ksh, tcsh, ash, dash, fish]
-
-- macro: spawned_process
-  condition: evt.type=execve
-
-- macro: container
-  condition: container.id != host
-
 - list: monitored_ns
   items: [dvwa]
 
 - macro: in_monitored_ns
   condition: (k8smeta.ns.name in (monitored_ns))
 
-- list: not_monitored_ns
-  items: [falco, wazuh, kube-system]
+- list: lab_shell_binaries
+  items: [bash, sh, zsh, csh, ksh, tcsh, ash, dash, fish]
 
-- macro: not_in_monitored_ns
-  condition: not (k8smeta.ns.name in (not_monitored_ns))
+- list: lab_web_processes
+  items: [apache2, httpd, php, php-fpm, php-cgi]
 
-- rule: Web Process Local Network Outbound
-  desc: Unwanted outbound traffic detected
+- list: lab_web_allowed_ports
+  items: [80, 443, 3306, 5432]
+
+- list: lab_listen_allowed_ports
+  items: [80, 443, 8080, 3000, 5432, 3306]
+
+- list: lab_mount_discovery_files
+  items: [/proc/mounts, /proc/self/mounts, /proc/self/mountinfo, /etc/mtab, /proc/partitions]
+
+- macro: lab_in_scope
+  condition: (container.id != host and in_monitored_ns)
+
+- macro: lab_spawned_process
+  condition: (evt.type in (execve, execveat) and evt.dir = < and evt.rawres = 0)
+
+- macro: lab_open_ok
+  condition: (evt.type in (open, openat, openat2) and evt.dir = < and fd.num >= 0)
+
+
+- rule: "Execution: Interactive Shell in Container"
+  desc: A shell was spawned in a monitored container with an attached terminal.
   condition: >
-    evt.type = connect and evt.dir = < and
-    fd.sockfamily = ip and container and
-    proc.name in (apache2, httpd, php, php-fpm) and
-    not fd.port in (80, 443, 3306, 5432)
-  output: "Unwanted outbound traffic detected (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline dest_ip=%fd.sip dest_port=%fd.sport)"
-  priority: CRITICAL
-  tags: [container_escape, mitre_command_and_control, network]
-
-- rule: Listen on Suspicious Port
-  desc: Suspicious port opened
-  condition: container and evt.type=listen and not fd.lport in (80, 443, 8080, 3000, 5432, 3306) and in_monitored_ns
-  output: Port opened (hostname=%evt.hostname user=%user.name port=%fd.lport process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
-  priority: WARNING
-  tags: [network, suspicious]
-
-- rule: Sensitive Mount Operation
-  desc: Mount command detected
-  condition: container and evt.type=mount and in_monitored_ns
-  output: Mount detection (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
-  priority: CRITICAL
-  tags: [container_escape, privilege_escalation]
-
-- rule: Suspicious SU Usage
-  desc: Suspicious SU usage detected
-  condition: >
-    container and
-    spawned_process and
-    proc.name = "su" and
-    (proc.args = "" or
-     proc.args = "-" or
-     proc.args contains "root") and in_monitored_ns
-  output: Suspicious su usage to root (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
-  priority: CRITICAL
-  tags: [privilege_escalation, suspicious_activity]
-
-- rule: Container Filesystem Reconnaissance (statfs)
-  desc: Detects the use of statfs or fstatfs syscalls to query disk space and mounts.
-  condition: evt.type in (open, openat, openat2) and evt.dir = < and fd.num >= 0 and container and in_monitored_ns and fd.name in ("/proc/mounts", "/proc/self/mountinfo", "/etc/mtab") 
-  output: Filesystem reconnaissance detected via statfs (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline binary=%proc.name file=%fd.name res=%evt.res syscall=%evt.type)
+    lab_spawned_process and lab_in_scope and
+    proc.name in (lab_shell_binaries) and
+    proc.tty != 0
+  output: >
+    Interactive shell spawned in container
+    (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
+    user=%user.name proc=%proc.name parent=%proc.pname tty=%proc.tty cmd=%proc.cmdline)
   priority: NOTICE
-  tags: [reconnaissance, mitre_discovery, T1083]
+  tags: [lab, mitre_execution, T1059.004, shell]
 
-- rule: Reconnaissance Command hostname
-  desc: Detects the use of hostname command to check IP addresses
-  condition: >
-    spawned_process and
-    proc.name = "hostname" and
-    (proc.args contains "-I" or proc.args contains "-i") and in_monitored_ns
-  output: Detected hostname command - network reconnaissance (hostname=%evt.hostname user=%user.name process=%proc.name command=%proc.cmdline pod_name=%k8smeta.pod.name namespace=%k8smeta.ns.name container_id=%container.id)
-  priority: NOTICE
-  tags: [reconnaissance, mitre_discovery, T1016]
-
-- rule: Container Process Enumeration (Procfs)
-  desc: Detects attempts to enumerate running processes by reading /proc/ directories.
-  condition: evt.type in (open, openat, openat2) and evt.dir = < and fd.num >= 0 and container and in_monitored_ns and (fd.name = "/proc" or fd.name = "/proc/")
-  output: Process enumeration detected via procfs read (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline binary=%proc.name file=%fd.name res=%evt.res)
-  priority: NOTICE
-  tags: [reconnaissance, mitre_discovery, T1057]    
-
-- rule: Terminal Shell in Container
-  desc: A shell was spawned in a container with an attached terminal
-  condition: >
-    spawned_process and
-    container and
-    proc.name in (shell_binaries) and
-    proc.tty != 0 and in_monitored_ns
-  output: Interactive shell spawned in container with terminal (hostname=%evt.hostname user=%user.name process=%proc.name shell=%proc.name parent=%proc.pname cmdline=%proc.cmdline terminal=%proc.tty container=%container.id)
-  priority: NOTICE
-  tags: [shell, container, terminal]
-
-- rule: Container Kernel Module Tampering (Syscall Level)
+- rule: "Discovery: Mount Table and Partition Read"
   desc: >
-    Detects attempts to load (init_module, finit_module) or unload (delete_module)
-    a kernel module from within a container, regardless of the binary used (e.g., busybox insmod).
-  condition: evt.type in (init_module, finit_module, delete_module) and container
-  output: Detected kernel module tampering from within a container! (action=%evt.type user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline binary=%proc.name ppid=%proc.ppid)
-  priority: CRITICAL
-  tags: [container_escape, mitre_privilege_escalation, mitre_defense_evasion, kernel]
+    A process in a monitored container successfully opened the mount table or the
+    partition list (/proc/mounts, mountinfo, mtab, /proc/partitions). Typical
+    precursor of a host filesystem mount.
+  condition: >
+    lab_open_ok and lab_in_scope and
+    fd.name in (lab_mount_discovery_files)
+  output: >
+    Mount table or partition list read
+    (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
+    user=%user.name proc=%proc.name parent=%proc.pname file=%fd.name res=%evt.res cmd=%proc.cmdline)
+  priority: NOTICE
+  tags: [lab, mitre_discovery, T1083, T1082]
 
-- rule: Container Kernel Module Enumeration (lsmod)
-  desc: Detects attempts to read the list of loaded kernel modules (/proc/modules) from within a container (Discovery phase / lsmod).
-  condition: evt.type in (open, openat, openat2) and evt.dir = < and container and fd.name = "/proc/modules" and not proc.name in (kubelet, containerd, docker)
-  output: Detected kernel module enumeration (lsmod / /proc/modules) (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline file=%fd.name binary=%proc.name)
+- rule: "Discovery: Process Enumeration via /proc"
+  desc: A process in a monitored container successfully opened the /proc directory (process listing).
+  condition: >
+    lab_open_ok and lab_in_scope and
+    fd.name in ("/proc", "/proc/")
+  output: >
+    Process enumeration via /proc
+    (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
+    user=%user.name proc=%proc.name parent=%proc.pname file=%fd.name res=%evt.res cmd=%proc.cmdline)
+  priority: NOTICE
+  tags: [lab, mitre_discovery, T1057]
+
+- rule: "Discovery: IP Address Lookup via hostname"
+  desc: The hostname binary was executed with an IP address flag (-i / -I) in a monitored container.
+  condition: >
+    lab_spawned_process and lab_in_scope and
+    proc.name = "hostname" and
+    (proc.args contains "-I" or proc.args contains "-i" or
+     proc.args contains "--ip-address" or proc.args contains "--all-ip-addresses")
+  output: >
+    IP address lookup via hostname
+    (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
+    user=%user.name proc=%proc.name parent=%proc.pname cmd=%proc.cmdline)
+  priority: NOTICE
+  tags: [lab, mitre_discovery, T1016]
+
+- rule: "Discovery: Network Configuration Read (/proc/net, /etc/hosts)"
+  desc: >
+    A process in a monitored container successfully opened /proc/net/route, arp,
+    fib_trie or dev (what ip, ifconfig, arp and route read), or /etc/hosts (shows the
+    container IP). Reads of /etc/hosts by the web server processes themselves are
+    excluded (name resolution); any other resolver (wget, curl, ping) will still match.
+  condition: >
+    lab_open_ok and lab_in_scope and
+    ((fd.directory = "/proc/net" and fd.filename in ("route", "arp", "fib_trie", "dev")) or
+     (fd.name = "/etc/hosts" and not proc.name in (lab_web_processes)))
+  output: >
+    Network configuration read
+    (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
+    user=%user.name proc=%proc.name parent=%proc.pname file=%fd.name res=%evt.res cmd=%proc.cmdline)
+  priority: NOTICE
+  tags: [lab, mitre_discovery, T1016]
+
+- rule: "Discovery: Kernel Module List Read"
+  desc: A process in a monitored container successfully opened /proc/modules (lsmod).
+  condition: >
+    lab_open_ok and lab_in_scope and
+    fd.name = "/proc/modules"
+  output: >
+    Kernel module list read
+    (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
+    user=%user.name proc=%proc.name parent=%proc.pname file=%fd.name res=%evt.res cmd=%proc.cmdline)
   priority: WARNING
-  tags: [mitre_discovery, recon, kernel]
+  tags: [lab, mitre_discovery, T1082, kernel]
 
-- rule: Container Process Injection (ptrace)
-  desc: Detects the use of the ptrace system call from within a container. 
-  condition: evt.type = ptrace and evt.arg.request = PTRACE_ATTACH and container
-  output: Process injection attempt detected via ptrace (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline binary=%proc.name ppid=%proc.ppid)
-  priority: CRITICAL
-  tags: [container_escape, process_injection, mitre_privilege_escalation, mitre_defense_evasion]
-
-- rule: Container Payload Staging (chmod)
-  desc: Detects attempts to modify file permissions to make them executable.
-  condition: evt.type in (chmod, fchmod, fchmodat) and evt.dir = < and container and in_monitored_ns and evt.arg.mode contains "S_IX"
-  output: Executable payload staging detected! File made executable via syscall (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline file=%evt.arg.filename mode=%evt.arg.mode)
-  priority: CRITICAL
-  tags: [mitre_defense_evasion, mitre_execution, file_modification]
-
-- rule: Network reconnaissance detected
-  desc: Detection of network reconnaissance (often used by 'ip a' or network recon)
-  condition: evt.type in (open, openat, openat2) and evt.dir = < and container and in_monitored_ns and ((fd.directory = "/etc" and fd.filename = "hosts") or (fd.directory = "/proc/net" and fd.filename in ("route", "arp", "fib_trie", "dev")))
-  output: Possible network reconnaissance detected (user=%user.name pod=%k8smeta.pod.name command=%proc.cmdline binary=%proc.name domain=%evt.arg.domain)
+- rule: "Privilege Escalation: su to root in Container"
+  desc: su was executed without arguments, with "-" or with root as target in a monitored container.
+  condition: >
+    lab_spawned_process and lab_in_scope and
+    proc.name = "su" and
+    (proc.args = "" or proc.args = "-" or proc.args contains "root")
+  output: >
+    su to root in container
+    (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
+    user=%user.name proc=%proc.name parent=%proc.pname cmd=%proc.cmdline)
   priority: WARNING
-  tags: [mitre_discovery, network_recon, syscall_level]
+  tags: [lab, mitre_privilege_escalation, T1078.003, privilege_escalation]
 
+- rule: "Privilege Escalation: Mount in Container"
+  desc: >
+    The mount syscall was issued from a monitored container (attempt or success,
+    see res). Typical step of an escape to the host filesystem.
+  condition: >
+    lab_in_scope and evt.type = mount and evt.dir = <
+  output: >
+    Mount operation in container
+    (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
+    user=%user.name proc=%proc.name parent=%proc.pname
+    src=%evt.arg.dev target=%evt.arg.dir fstype=%evt.arg.type res=%evt.res cmd=%proc.cmdline)
+  priority: CRITICAL
+  tags: [lab, mitre_privilege_escalation, T1611, container_escape]
+
+- rule: "Privilege Escalation: chroot in Container"
+  desc: >
+    The chroot syscall was issued from a monitored container (attempt or success,
+    see res). Typically follows a host filesystem mount.
+  condition: >
+    lab_in_scope and evt.type = chroot and evt.dir = <
+  output: >
+    chroot in container
+    (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
+    user=%user.name proc=%proc.name parent=%proc.pname
+    target=%evt.arg.path res=%evt.res cmd=%proc.cmdline)
+  priority: CRITICAL
+  tags: [lab, mitre_privilege_escalation, T1611, container_escape]
+
+- rule: "Privilege Escalation: Kernel Module Load or Unload"
+  desc: >
+    init_module, finit_module or delete_module was issued from a monitored container
+    (attempt or success, see res), regardless of the binary used (e.g. busybox insmod).
+  condition: >
+    lab_in_scope and
+    evt.type in (init_module, finit_module, delete_module) and evt.dir = <
+  output: >
+    Kernel module load or unload from container
+    (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
+    user=%user.name proc=%proc.name parent=%proc.pname action=%evt.type res=%evt.res cmd=%proc.cmdline)
+  priority: CRITICAL
+  tags: [lab, mitre_privilege_escalation, mitre_persistence, T1547.006, kernel]
+
+- rule: "Defense Evasion: ptrace Attach to Process"
+  desc: A process in a monitored container attached to another process with ptrace (injection / debugging).
+  condition: >
+    lab_in_scope and evt.type = ptrace and
+    evt.arg.request in (PTRACE_ATTACH, PTRACE_SEIZE)
+  output: >
+    ptrace attach in container
+    (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
+    user=%user.name proc=%proc.name parent=%proc.pname
+    request=%evt.arg.request target_pid=%evt.arg.pid cmd=%proc.cmdline)
+  priority: CRITICAL
+  tags: [lab, mitre_defense_evasion, mitre_privilege_escalation, T1055.008, process_injection]
+
+- rule: "Defense Evasion: Executable Permission Set (chmod)"
+  desc: A file was successfully made executable with chmod / fchmod / fchmodat in a monitored container.
+  condition: >
+    lab_in_scope and
+    evt.type in (chmod, fchmod, fchmodat) and evt.dir = < and evt.rawres = 0 and
+    evt.arg.mode contains "S_IX"
+  output: >
+    File made executable
+    (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
+    user=%user.name proc=%proc.name parent=%proc.pname
+    file=%evt.arg.filename mode=%evt.arg.mode res=%evt.res cmd=%proc.cmdline)
+  priority: WARNING
+  tags: [lab, mitre_defense_evasion, T1222.002, file_modification]
+
+
+- rule: "Command and Control: Ingress Transfer from Web Process"
+  desc: >
+    A web server process, or a descendant of one (up to 3 levels), opened an outbound
+    TCP connection to a non-standard port (loopback excluded). Typical of a tool download
+    triggered through the web app (e.g. wget / busybox fetching binaries after command
+    injection); a reverse shell looks the same at this level. Transfers served on an
+    allow-listed port (80, 443, 3306, 5432) are not detected.
+  condition: >
+    lab_in_scope and evt.type = connect and evt.dir = < and
+    (fd.typechar = 4 or fd.typechar = 6) and fd.l4proto = tcp and
+    (proc.name in (lab_web_processes) or proc.pname in (lab_web_processes) or
+     proc.aname[2] in (lab_web_processes) or proc.aname[3] in (lab_web_processes)) and
+    not fd.sport in (lab_web_allowed_ports) and
+    not fd.sip in ("127.0.0.1", "::1")
+  output: >
+    Outbound connection from web process to non-standard port (possible tool transfer)
+    (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
+    user=%user.name proc=%proc.name parent=%proc.pname dst=%fd.sip:%fd.sport cmd=%proc.cmdline)
+  priority: CRITICAL
+  tags: [lab, mitre_command_and_control, T1105, T1571, network]
+
+- rule: "Command and Control: Listener on Non-Standard Port"
+  desc: A process in a monitored container started listening on a port outside the allow-list.
+  condition: >
+    lab_in_scope and evt.type = listen and evt.dir = < and
+    not fd.sport in (lab_listen_allowed_ports)
+  output: >
+    Listener on non-standard port
+    (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
+    user=%user.name proc=%proc.name parent=%proc.pname port=%fd.sport cmd=%proc.cmdline)
+  priority: WARNING
+  tags: [lab, mitre_command_and_control, T1571, network]
