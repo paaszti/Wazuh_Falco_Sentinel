@@ -1,4 +1,0 @@
-<decoder name="falco">
-    <prematch>stdout F </prematch>
-    <plugin_decoder offset="after_prematch">JSON_Decoder</plugin_decoder>
-</decoder>

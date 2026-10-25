@@ -1,5 +1,4 @@
 # helm3 install falco falcosecurity/falco -n falco --create-namespace -f falco-values.yaml
-# (upgrade: helm3 upgrade falco falcosecurity/falco -n falco -f falco-values.yaml)
 tty: true
 collectors:
   kubernetes:
