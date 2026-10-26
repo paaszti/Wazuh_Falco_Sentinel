@@ -8,7 +8,7 @@ spec:
   template:
     metadata:
       annotations:
-        fluentbit.io/exclude_wazuh-manager: "true" 
+        fluentbit.io/exclude-wazuh-manager: "true" 
 ---
 apiVersion: apps/v1
 kind: StatefulSet
