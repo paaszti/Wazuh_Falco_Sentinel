@@ -1,9 +1,9 @@
 - list: monitored_ns
   items: [dvwa]
-
+ 
 - macro: in_monitored_ns
   condition: (k8smeta.ns.name in (monitored_ns))
-
+ 
 - list: lab_shell_binaries
   items: [bash, sh, zsh, csh, ksh, tcsh, ash, dash, fish]
  
@@ -22,6 +22,9 @@
 - list: lab_node_allowed_ports
   items: [80, 443, 3306, 5432]
  
+- list: lab_host_listen_allowed_ports
+  items: [22, 53, 1338, 7472, 7946, 9099, 10248, 10249, 10250, 10256, 10257, 10259, 16443, 19001, 25000]
+ 
 - list: lab_mount_discovery_files
   items: [/proc/mounts, /proc/self/mounts, /proc/self/mountinfo, /etc/mtab, /proc/partitions]
  
@@ -39,7 +42,6 @@
  
 - macro: lab_open_ok
   condition: (evt.type in (open, openat, openat2) and fd.num >= 0)
- 
  
 - rule: "Execution: Interactive Shell in Container"
   desc: A shell was spawned in a monitored container with an attached terminal.
@@ -158,7 +160,6 @@
   priority: WARNING
   tags: [lab, mitre_discovery, T1082, kernel]
  
- 
 - rule: "Privilege Escalation: su to root in Container"
   desc: su was executed without arguments, with "-" or with root as target in a monitored container.
   condition: >
@@ -214,7 +215,6 @@
   priority: CRITICAL
   tags: [lab, mitre_privilege_escalation, mitre_persistence, T1547.006, kernel]
  
- 
 - rule: "Defense Evasion: ptrace Attach to Process"
   desc: A process in a monitored container attached to another process with ptrace (injection / debugging).
   condition: >
@@ -224,7 +224,7 @@
     ptrace attach in container
     (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
     user=%user.name proc=%proc.name pid=%proc.pid parent=%proc.pname
-    request=%evt.arg.request target_pid=%evt.arg.pid cmd=%proc.cmdline)
+    request=%evt.arg.request target_pid=%evt.arg.pid res=%evt.res cmd=%proc.cmdline)
   priority: CRITICAL
   tags: [lab, mitre_defense_evasion, mitre_privilege_escalation, T1055.008, process_injection]
  
@@ -241,7 +241,6 @@
     file=%evt.arg.filename mode=%evt.arg.mode res=%evt.res cmd=%proc.cmdline)
   priority: WARNING
   tags: [lab, mitre_defense_evasion, T1222.002, file_modification]
- 
  
 - rule: "Command and Control: Ingress Transfer from Web Process"
   desc: >
@@ -260,7 +259,7 @@
   output: >-
     Outbound connection from web process to non-standard port (possible tool transfer)
     (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
-    user=%user.name proc=%proc.name pid=%proc.pid parent=%proc.pname dst=%fd.sip:%fd.sport cmd=%proc.cmdline)
+    user=%user.name proc=%proc.name pid=%proc.pid parent=%proc.pname dst=%fd.sip:%fd.sport res=%evt.res cmd=%proc.cmdline)
   priority: CRITICAL
   tags: [lab, mitre_command_and_control, T1105, T1571, network]
  
@@ -272,7 +271,7 @@
   output: >-
     Listener on non-standard port
     (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
-    user=%user.name proc=%proc.name pid=%proc.pid parent=%proc.pname port=%fd.sport cmd=%proc.cmdline)
+    user=%user.name proc=%proc.name pid=%proc.pid parent=%proc.pname port=%fd.sport res=%evt.res cmd=%proc.cmdline)
   priority: WARNING
   tags: [lab, mitre_command_and_control, T1571, network]
  
@@ -291,7 +290,22 @@
   output: >-
     Container to node connection on non-standard port
     (host=%evt.hostname ns=%k8smeta.ns.name pod=%k8smeta.pod.name container=%container.id
-    user=%user.name proc=%proc.name pid=%proc.pid parent=%proc.pname dst=%fd.sip:%fd.sport cmd=%proc.cmdline)
+    user=%user.name proc=%proc.name pid=%proc.pid parent=%proc.pname dst=%fd.sip:%fd.sport res=%evt.res cmd=%proc.cmdline)
   priority: WARNING
   tags: [lab, mitre_command_and_control, T1571, network]
-
+ 
+- rule: "Command and Control: Host Listener on Non-Standard Port"
+  desc: >
+    A process running on the node itself (not in a container) started listening on a
+    TCP port outside the allow-list of the node's own services. Loopback is excluded.
+  condition: >
+    evt.type = listen and container.id = host and
+    (fd.typechar = 4 or fd.typechar = 6) and
+    not fd.sip in ("127.0.0.1", "::1", "127.0.0.53", "127.0.0.54") and
+    not fd.sport in (lab_host_listen_allowed_ports)
+  output: >-
+    Host listener on non-standard port
+    (host=%evt.hostname container=%container.id user=%user.name proc=%proc.name pid=%proc.pid
+    parent=%proc.pname bind=%fd.sip:%fd.sport res=%evt.res cmd=%proc.cmdline)
+  priority: NOTICE
+  tags: [lab, mitre_command_and_control, T1571, network, host]
