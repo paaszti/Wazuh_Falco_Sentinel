@@ -17,6 +17,8 @@ Wazuh_Falco_Alerts
     ChrootTargets     = make_set_if(ChrootPath, Stage == "3-Chroot" and isnotempty(ChrootPath), 10),
     Pods              = make_set_if(Pod, isnotempty(Pod), 10),
     Mounts            = make_set_if(strcat(MountSrc, " -> ", MountTarget), Stage == "3-HostFS" and isnotempty(MountSrc), 10),
+    ContainerIds      = make_set_if(ContainerId, isnotempty(ContainerId), 5),
+    Pids              = make_set_if(Pid, Stage in ("3-HostFS", "3-Chroot", "5-Listener"), 10),
     Commands          = make_list_if(CmdLine, isnotempty(CmdLine), 25)
     by Host
 | where isnotnull(T_HostFS) and isnotnull(T_Shell)

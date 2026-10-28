@@ -1,10 +1,3 @@
-// RULE 3   Container escape: kernel module loaded from a container
-//   Severity High | Tactics: Privilege Escalation, Persistence | T1547.006, T1611
-//   Run every 5 min, lookup 30 min, threshold > 0, group all events into ONE alert,
-//   suppression 30 min.
-//   Entity mapping: Host -> HostName = Host
-//   Custom details: Pod, Stages, Modules, Commands, ReconComplete
-//   Required: the module load only. Everything else is evidence.
 Wazuh_Falco_Alerts
 | where IngestTime > ago(30m)
 | where Stage != ""
@@ -23,6 +16,8 @@ Wazuh_Falco_Alerts
     SawExecPerm       = countif(Stage == "2-ExecPerm") > 0,
     Pods              = make_set_if(Pod, isnotempty(Pod), 10),
     Modules           = make_set_if(CmdLine, Stage == "3-KernelModule", 10),
+    ContainerIds      = make_set_if(ContainerId, isnotempty(ContainerId), 5),
+    Pids              = make_set_if(Pid, Stage == "3-KernelModule", 10),
     Commands          = make_list_if(CmdLine, isnotempty(CmdLine), 25)
     by Host
 | where isnotnull(T_Module)
