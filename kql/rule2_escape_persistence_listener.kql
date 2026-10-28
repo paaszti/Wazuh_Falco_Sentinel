@@ -1,0 +1,40 @@
+// RULE 2   Container escape followed by host persistence or reverse-shell listener
+//   Severity High | Tactics: Privilege Escalation, Persistence, Command and Control
+//   T1611, T1053.003, T1571
+//   Run every 5 min, lookup 60 min, threshold > 0, group all events into ONE alert,
+//   suppression 30 min.
+//   Entity mapping: Host -> HostName = Host
+//   Custom details: Pod, Stages, CronFiles, ListenPorts, NodeConnections, HostListeners, Commands
+//   Required: an escape stage (mount/chroot, kernel module load or ptrace attach; the
+//   call must not have failed), then a write to /etc/cron* (Wazuh FIM on the node), a
+//   non-standard listener in the container, a SUCCESSFUL connection from the container
+//   to a node address on a non-standard port, or a non-standard listener on the host
+//   itself (6-HostListener; only once that Falco rule runs above NOTICE priority).
+//   The host listener and the node connection are the strongest evidence that code
+//   really runs on the host.
+Wazuh_Falco_Alerts
+| where IngestTime > ago(60m)
+| where Stage != ""
+| order by EventTime asc
+| summarize
+    FirstSeen   = min(EventTime),
+    LastSeen    = max(EventTime),
+    Stages      = make_set(Stage),
+    T_Escape    = minif(EventTime, Stage in ("3-HostFS", "3-KernelModule", "3-ProcessInjection")),
+    T_Persist   = maxif(EventTime, Stage == "4-Persistence"),
+    T_Listener  = maxif(EventTime, Stage == "5-Listener"),
+    T_NodeConn  = maxif(EventTime, Stage == "5-NodeConnection"),
+    T_HostListen = maxif(EventTime, Stage == "6-HostListener"),
+    Pods        = make_set_if(Pod, isnotempty(Pod), 10),
+    CronFiles   = make_set_if(FimPath, Stage == "4-Persistence", 10),
+    ListenPorts = make_set_if(Port, Stage == "5-Listener", 10),
+    NodeConnections = make_set_if(strcat(RemoteIp, ":", Port), Stage == "5-NodeConnection", 10),
+    HostListeners   = make_set_if(strcat(Proc, " (pid ", Pid, ") ", RemoteIp, ":", Port), Stage == "6-HostListener", 10),
+    Commands    = make_list_if(CmdLine, isnotempty(CmdLine), 25)
+    by Host
+| where isnotnull(T_Escape)
+| where T_Persist >= T_Escape or T_Listener >= T_Escape or T_NodeConn >= T_Escape
+        or T_HostListen >= T_Escape
+| extend Pod = tostring(Pods[0]),
+         ChainLength = array_length(Stages),
+         TimeGenerated = LastSeen

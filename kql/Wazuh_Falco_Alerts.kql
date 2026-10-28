@@ -1,0 +1,73 @@
+ContainerLogV2
+| where PodNamespace == "wazuh" and ContainerName == "alerts-forwarder"
+| extend A = parse_json(LogMessage)
+| where isnotempty(tostring(A.rule.id))
+| extend F = A.data.output_fields
+| extend Agent = tostring(A.agent.name),
+         HostFalco = tostring(A.data.hostname),
+         // Wazuh writes "+0000" (no colon); make it ISO-8601 so todatetime() parses it
+         WazuhTs = todatetime(replace_regex(tostring(A.timestamp), @"([+-]\d\d)(\d\d)$", @"\1:\2"))
+| project
+    IngestTime    = TimeGenerated,
+    EventTime     = coalesce(todatetime(A.data["time"]), WazuhTs, TimeGenerated),
+    WazuhRuleId   = tostring(A.rule.id),
+    WazuhLevel    = toint(A.rule.level),
+    Agent,
+    // Falco alerts carry data.hostname ("wazuh"); FIM alerts only have the agent
+    // name ("node-wazuh"). Normalise both to one Host key.
+    Host          = iff(isnotempty(HostFalco), HostFalco, trim_start("node-", Agent)),
+    FalcoRule     = tostring(A.data.rule),
+    FalcoPrio     = tostring(A.data.priority),
+    Namespace     = tostring(F.k8smeta.ns.name),
+    Pod           = tostring(F.k8smeta.pod.name),
+    ContainerId   = tostring(F.container.id),
+    User          = tostring(F.user.name),
+    Proc          = tostring(F.proc.name),
+    Pid           = tostring(F.proc.pid),
+    ParentProc    = tostring(F.proc.pname),
+    CmdLine       = tostring(F.proc.cmdline),
+    MountSrc      = tostring(F.evt.arg.dev),
+    MountTarget   = tostring(F.evt.arg.dir),
+    ChrootPath    = tostring(F.evt.arg.path),
+    EvtType       = tostring(F.evt["type"]),        
+    PtraceRequest = tostring(F.evt.arg.request),    
+    PtraceTarget  = tostring(F.evt.arg.pid),        
+    RemoteIp      = tostring(F.fd.sip),
+    Port          = tostring(F.fd.sport),
+    FimPath       = tostring(A.syscheck.path),
+    FimEvent      = tostring(A.syscheck.event),
+    Output        = tostring(A.data.output)
+| extend Result = extract(@"\bres=(\w+) cmd=", 1, Output)
+| extend Outcome = case(
+    isempty(Result),                         "",
+    Result in ("SUCCESS", "EINPROGRESS"),    "ok",
+    "failed")
+| extend Stage = case(
+    FalcoRule in ("Discovery: Kernel Information via uname",
+                  "Discovery: Kernel Version File Read"),                "0-KernelRecon",
+    FalcoRule == "Discovery: IP Address Lookup via hostname"
+        or FalcoRule startswith "Discovery: Network Configuration Read", "0-NetRecon",
+    FalcoRule == "Discovery: Process Enumeration via /proc",             "0-ProcEnum",
+    FalcoRule == "Discovery: Mount Table and Partition Read",            "0-MountTableRead",
+    FalcoRule == "Discovery: Kernel Module List Read",                   "0-ModuleListRead",
+    FalcoRule startswith "Discovery:",                                   "0-Recon",
+    FalcoRule startswith "Command and Control: Ingress",                 "0-ToolTransfer",
+    FalcoRule == "Execution: Interactive Shell in Container",            "1-Shell",
+    FalcoRule == "Privilege Escalation: su to root in Container",        "2-PrivEsc",
+    FalcoRule startswith "Defense Evasion: Executable Permission",       "2-ExecPerm",
+    FalcoRule == "Privilege Escalation: Mount in Container"
+        and not(MountSrc startswith "/dev/"),                            "3-MountOther",
+    FalcoRule == "Privilege Escalation: Mount in Container",
+        iff(Outcome == "failed", "3-HostFSAttempt", "3-HostFS"),
+    FalcoRule == "Privilege Escalation: chroot in Container",            "3-Chroot",
+    FalcoRule == "Privilege Escalation: Kernel Module Load or Unload",
+        iff(Outcome == "failed", "3-KernelModuleAttempt", "3-KernelModule"),
+    FalcoRule == "Defense Evasion: ptrace Attach to Process",
+        iff(Outcome == "failed", "3-ProcessInjectionAttempt", "3-ProcessInjection"),
+    FimPath startswith "/etc/cron" or FimPath startswith "/var/spool/cron", "4-Persistence",
+    FalcoRule == "Command and Control: Listener on Non-Standard Port",   "5-Listener",
+    FalcoRule == "Command and Control: Container to Node Connection on Non-Standard Port",
+        iff(Outcome == "failed", "5-NodeConnectionFailed", "5-NodeConnection"),
+    FalcoRule == "Command and Control: Host Listener on Non-Standard Port"
+        and tolower(FalcoPrio) != "notice",                              "6-HostListener",
+    "")

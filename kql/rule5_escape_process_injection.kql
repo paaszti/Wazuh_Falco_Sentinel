@@ -1,0 +1,37 @@
+// RULE 5   Container escape: ptrace attach to another process (process injection)
+//   Severity High | Tactics: Defense Evasion, Privilege Escalation | T1055.008, T1611
+//   Run every 5 min, lookup 30 min, threshold > 0, group all events into ONE alert,
+//   suppression 30 min.
+//   Entity mapping: Host -> HostName = Host
+//   Custom details: Pod, Stages, Injectors, Targets, NodeConnections, Commands, ReconComplete
+//   Required: the ptrace attach only. Everything before it is evidence.
+//   ReconComplete = kernel recon AND network recon (any order, e.g. before or after
+//   process enumeration) both happened BEFORE the injection.
+Wazuh_Falco_Alerts
+| where IngestTime > ago(30m)
+| where Stage != ""
+| order by EventTime asc
+| summarize
+    FirstSeen       = min(EventTime),
+    LastSeen        = max(EventTime),
+    Stages          = make_set(Stage),
+    T_Inject        = minif(EventTime, Stage == "3-ProcessInjection"),
+    T_KernelRecon   = minif(EventTime, Stage == "0-KernelRecon"),
+    T_NetRecon      = minif(EventTime, Stage == "0-NetRecon"),
+    SawProcEnum     = countif(Stage == "0-ProcEnum") > 0,
+    SawToolTransfer = countif(Stage == "0-ToolTransfer") > 0,
+    SawShell        = countif(Stage == "1-Shell") > 0,
+    SawPrivEsc      = countif(Stage == "2-PrivEsc") > 0,
+    SawExecPerm     = countif(Stage == "2-ExecPerm") > 0,
+    NodeConnections = make_set_if(strcat(RemoteIp, ":", Port), Stage == "5-NodeConnection", 10),
+    Pods            = make_set_if(Pod, isnotempty(Pod), 10),
+    Injectors       = make_set_if(CmdLine, Stage == "3-ProcessInjection", 10),
+    Targets         = make_set_if(PtraceTarget, Stage == "3-ProcessInjection", 10),
+    Commands        = make_list_if(CmdLine, isnotempty(CmdLine), 25)
+    by Host
+| where isnotnull(T_Inject)
+| extend ReconComplete = isnotnull(T_KernelRecon) and isnotnull(T_NetRecon)
+                         and T_KernelRecon <= T_Inject and T_NetRecon <= T_Inject,
+         Pod = tostring(Pods[0]),
+         ChainLength = array_length(Stages),
+         TimeGenerated = LastSeen
