@@ -1,5 +1,5 @@
 dvwa.tar
-wazuh/wazuh/certs/*.pem
-wazuh/wazuh/certs/*.csr
-wazuh/wazuh/certs/*.srl
+wazuh/wazuh/certs/dashboard_http/*.pem
+wazuh/wazuh/certs/indexer_cluster/*.csr
+wazuh/wazuh/certs/indexer_cluster/*.srl
 
