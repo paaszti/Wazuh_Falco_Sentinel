@@ -1,2 +1,5 @@
 dvwa.tar
-wazuh/wazuh/certs/*
+wazuh/wazuh/certs/*.pem
+wazuh/wazuh/certs/*.csr
+wazuh/wazuh/certs/*.srl
+
