@@ -1,5 +1,7 @@
 # helm3 install falco falcosecurity/falco -n falco --create-namespace -f falco-values.yaml
 tty: true
+driver:
+  kind: modern_ebpf
 collectors:
   kubernetes:
     enabled: true
