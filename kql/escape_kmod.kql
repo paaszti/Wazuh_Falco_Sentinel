@@ -18,6 +18,7 @@ Wazuh_Falco_Alerts
     Modules           = make_set_if(CmdLine, Stage == "3-KernelModule", 10),
     ContainerIds      = make_set_if(ContainerId, isnotempty(ContainerId), 5),
     Pids              = make_set_if(Pid, Stage == "3-KernelModule", 10),
+    ListenPorts       = make_set_if(Port, Stage == "5-Listener", 10),
     Commands          = make_list_if(CmdLine, isnotempty(CmdLine), 25)
     by Host
 | where isnotnull(T_Module)

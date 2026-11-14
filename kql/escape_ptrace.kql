@@ -15,6 +15,7 @@ Wazuh_Falco_Alerts
     SawPrivEsc      = countif(Stage == "2-PrivEsc") > 0,
     SawExecPerm     = countif(Stage == "2-ExecPerm") > 0,
     NodeConnections = make_set_if(strcat(RemoteIp, ":", Port), Stage == "5-NodeConnection", 10),
+    ListenPorts     = make_set_if(Port, Stage == "5-Listener", 10),
     Pods            = make_set_if(Pod, isnotempty(Pod), 10),
     Injectors       = make_set_if(CmdLine, Stage == "3-ProcessInjection", 10),
     Targets         = make_set_if(PtraceTarget, Stage == "3-ProcessInjection", 10),
