@@ -1,28 +1,33 @@
 Wazuh_Falco_Alerts
-| where IngestTime > ago(60m)
+| where IngestTime > ago(30m)
 | where Stage != ""
 | order by EventTime asc
 | summarize
-    FirstSeen   = min(EventTime),
-    LastSeen    = max(EventTime),
-    Stages      = make_set(Stage),
-    T_Escape    = minif(EventTime, Stage in ("3-HostFS", "3-KernelModule", "3-ProcessInjection")),
-    T_Persist   = maxif(EventTime, Stage == "4-Persistence"),
-    T_Listener  = maxif(EventTime, Stage == "5-Listener"),
-    T_NodeConn  = maxif(EventTime, Stage == "5-NodeConnection"),
-    T_HostListen = maxif(EventTime, Stage == "6-HostListener"),
-    Pods        = make_set_if(Pod, isnotempty(Pod), 10),
-    CronFiles   = make_set_if(FimPath, Stage == "4-Persistence", 10),
-    ListenPorts = make_set_if(Port, Stage == "5-Listener", 10),
-    NodeConnections = make_set_if(strcat(RemoteIp, ":", Port), Stage == "5-NodeConnection", 10),
-    HostListeners   = make_set_if(strcat(Proc, " (pid ", Pid, ") ", RemoteIp, ":", Port), Stage == "6-HostListener", 10),
-    ContainerIds = make_set_if(ContainerId, isnotempty(ContainerId), 5),
-    Pids        = make_set_if(Pid, Stage in ("3-HostFS", "3-KernelModule", "3-ProcessInjection", "5-Listener", "6-HostListener"), 10),
-    Commands    = make_list_if(CmdLine, isnotempty(CmdLine), 25)
+    FirstSeen         = min(EventTime),
+    LastSeen          = max(EventTime),
+    Stages            = make_set(Stage),
+    T_Shell           = minif(EventTime, Stage == "1-Shell"),
+    T_HostFS          = minif(EventTime, Stage == "3-HostFS"),
+    T_Persist         = maxif(EventTime, Stage == "4-Persistence"),
+    T_KernelRecon     = minif(EventTime, Stage == "0-KernelRecon"),
+    T_NetRecon        = minif(EventTime, Stage == "0-NetRecon"),
+    SawMountTableRead = countif(Stage == "0-MountTableRead") > 0,
+    SawToolTransfer   = countif(Stage == "0-ToolTransfer") > 0,
+    SawPrivEsc        = countif(Stage == "2-PrivEsc") > 0,
+    SawChroot         = countif(Stage == "3-Chroot") > 0,
+    Mounts            = make_set_if(strcat(MountSrc, " -> ", MountTarget), Stage == "3-HostFS" and isnotempty(MountSrc), 10),
+    ChrootTargets     = make_set_if(ChrootPath, Stage == "3-Chroot" and isnotempty(ChrootPath), 10),
+    CronFiles         = make_set_if(strcat(FimPath, " (", FimEvent, ")"), Stage == "4-Persistence", 10),
+    ListenPorts       = make_set_if(Port, Stage == "5-Listener", 10),
+    Pods              = make_set_if(Pod, isnotempty(Pod), 10),
+    ContainerIds      = make_set_if(ContainerId, isnotempty(ContainerId), 5),
+    Pids              = make_set_if(Pid, Stage in ("3-HostFS", "3-Chroot", "5-Listener"), 10),
+    Commands          = make_list_if(CmdLine, isnotempty(CmdLine), 25)
     by Host
-| where isnotnull(T_Escape)
-| where T_Persist >= T_Escape or T_Listener >= T_Escape or T_NodeConn >= T_Escape
-        or T_HostListen >= T_Escape
-| extend Pod = tostring(Pods[0]),
+| where isnotnull(T_Shell) and isnotnull(T_HostFS) and isnotnull(T_Persist)
+| where T_Shell <= T_HostFS and T_HostFS <= T_Persist
+| extend ReconComplete = isnotnull(T_KernelRecon) and isnotnull(T_NetRecon)
+                         and T_KernelRecon <= T_HostFS and T_NetRecon <= T_HostFS,
+         Pod = tostring(Pods[0]),
          ChainLength = array_length(Stages),
          TimeGenerated = LastSeen
