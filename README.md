@@ -28,7 +28,7 @@ can be executed and observed end to end.
   - [Wazuh ingestion rules](#wazuh-ingestion-rules)
   - [Wazuh Kubernetes deployment](#wazuh-kubernetes-deployment)
   - [KQL correlation (Sentinel)](#kql-correlation-sentinel)
-  - [SOC responder](#soc-responder)
+  - [SOC responder (auto-response)](#soc-responder-auto-response)
   - [Attack files](#attack-files)
 - [Attack-chain model](#attack-chain-model)
 - [Deployment](#deployment)
@@ -81,9 +81,11 @@ can be executed and observed end to end.
                                                              │ incident (queue msg)
                                                ┌─────────────▼─────────────┐
                                                │ soc-responder.sh (on node)│
+                                               │  • dispatch by attack type│
                                                │  • label pod quarantine   │
                                                │  • NetworkPolicy isolates │
-                                               │  • kill listener PIDs      │
+                                               │  • kill attacker PIDs     │
+                                               │  • attack-specific cleanup│
                                                └───────────────────────────┘
 ```
 
@@ -113,8 +115,11 @@ can be executed and observed end to end.
    **Microsoft Teams** and hands the operator a per-attack checklist to confirm the
    alert is a true positive.
 7. An incident enqueues a message that the **SOC responder** on the node consumes:
-   it validates the payload, labels the pod `quarantine=true` (which the
-   `quarantine` NetworkPolicy isolates), and kills the offending listener PIDs.
+   it validates the payload and dispatches on the attack `type` (`mount`, `kmod`,
+   `ptrace`) to a per-attack script. Every script labels the pod `quarantine=true`
+   (which the `quarantine` NetworkPolicy isolates) and kills the offending PIDs;
+   the mount and kernel-module scripts also clean up persistence / remove the
+   module and preserve evidence.
 
 ---
 
@@ -128,13 +133,16 @@ can be executed and observed end to end.
 ├── custom-rules.yaml         # Falco detection rules (source of truth; also inlined in values)
 ├── falco-rules.xml           # Wazuh rules that ingest/classify Falco JSON (IDs 100600–100607)
 ├── quarantine-np.yaml        # NetworkPolicy that isolates quarantined pods
-├── soc-responder.sh          # Node-side automated responder (quarantine + kill)
+├── auto-response/            # Node-side automated responders (see "SOC responder")
+│   ├── soc-responder.sh      # Queue poller, validator and dispatcher
+│   ├── respond-mount.sh      # Hostfs-mount escape: quarantine, cron cleanup, kill
+│   ├── respond-kmod.sh       # Kernel-module escape: quarantine, evidence, kill, rmmod
+│   └── respond-ptrace.sh     # ptrace-injection escape: quarantine, kill listener
 ├── kql/
-│   ├── Wazuh_Falco_Alerts.kql            # Parser/normaliser + Stage labelling (Sentinel function)
-│   ├── rule1_escape_hostfs_mount.kql     # hostfs mount + chroot escape chain      ┐ being merged
-│   ├── rule2_escape_persistence_listener.kql  # escape → persistence / listener    ┘ into one rule
-│   ├── rule3_escape_kernel_module.kql    # malicious kernel-module load escape
-│   └── rule5_escape_process_injection.kql     # ptrace process-injection escape
+│   ├── Wazuh_Falco_Alerts.kql   # Parser/normaliser + Stage labelling (Sentinel function)
+│   ├── escape_mount.kql         # hostfs mount + chroot escape → cron persistence
+│   ├── escape_kmod.kql          # malicious kernel-module load escape
+│   └── escape_ptrace.kql        # ptrace process-injection escape
 ├── attack-files/
 │   ├── rev-shell.c           # LKM reverse-shell kernel module
 │   ├── Makefile              # Builds the kernel module
@@ -251,23 +259,23 @@ Deployed with Kustomize from `wazuh/envs/lab/` (which layers on `../local-env`):
 - derives `Outcome` (ok / failed) from the `res=` field; and
 - assigns each event a kill-chain **`Stage`** label (see below).
 
-The scheduled analytics rules each look for a specific escape pattern over a time
-window and emit one incident per host when the ordered stage sequence is present.
-They use `summarize ... by Host` with `minif`/`maxif` to establish ordering, then
-gate on **sequence** (e.g. `T_Shell <= T_HostFS`) so that isolated low-severity
-events don't raise an incident — only a coherent chain does.
-
-Two correlation queries are documented here:
+There is one scheduled analytics rule per attack. Each looks at the last 30 minutes
+(`IngestTime > ago(30m)`) and emits one incident per host when its stage sequence is
+present. They use `summarize ... by Host` with `minif`/`maxif` to establish ordering,
+and gate on the key stage (and, for the mount rule, on **sequence**
+`T_Shell <= T_HostFS <= T_Persist`) so that isolated low-severity events don't raise
+an incident — only a coherent chain does.
 
 | Rule | Detects | Core condition |
 |------|---------|----------------|
-| `rule3_escape_kernel_module` | Malicious kernel-module load escape | presence of `3-KernelModule`, correlated with recon (`0-KernelRecon`/`0-NetRecon`, `0-ModuleListRead`) and priv-esc (`2-PrivEsc`/`2-ExecPerm`) context |
-| `rule5_escape_process_injection` | ptrace process-injection escape | presence of `3-ProcessInjection`, correlated with `0-ProcEnum`, recon completeness, priv-esc and any follow-on node connection |
+| `escape_mount.kql` | Hostfs mount + chroot escape followed by persistence | `1-Shell` → `3-HostFS` → `4-Persistence` in order; enriched with mount sources/targets, chroot paths, cron files, listener ports |
+| `escape_kmod.kql` | Malicious kernel-module load escape | presence of `3-KernelModule`; enriched with recon completeness, tool transfer / priv-esc / exec-perm context, module command lines and any listener ports |
+| `escape_ptrace.kql` | ptrace process-injection escape | presence of `3-ProcessInjection`; enriched with `/proc` enumeration, recon completeness, priv-esc, ptrace targets and node connections |
 
-Each returns a per-host summary (first/last seen, the set of observed stages, chain
-length, pod/container IDs, the relevant PIDs and the command lines) so an incident
-carries the full chain, not a single event.
-
+All three compute `ReconComplete` (kernel **and** network recon observed before the
+key stage) and return a per-host summary (first/last seen, observed stages, chain
+length, pod/container IDs, relevant PIDs, command lines) so an incident carries the
+full chain, not a single event.
 
 #### Sentinel playbooks & notification
 
@@ -284,27 +292,35 @@ This keeps a human in the loop: the KQL correlation already filters to coherent
 chains, and the playbook gives the operator a per-attack checklist to validate the
 incident.
 
-### SOC responder
+### SOC responder (auto-response)
 
-`soc-responder.sh` runs on the node and polls an Azure Storage queue (configured via
-`QUEUE_URL` and `SAS` environment variables) for incident messages produced by
-Sentinel automation. For each message it:
+`auto-response/soc-responder.sh` runs on the node and polls an Azure Storage queue
+(configured via `QUEUE_URL` and `SAS` environment variables) for incident messages
+produced by Sentinel automation. For each message it:
 
-1. **Parses** the JSON payload (`pod`, `node`, `port`, `incident`).
+1. **Parses** the JSON payload (`type`, `pod`, `node`, `port`, `incident`, and an
+   optional `module`). Plain JSON and base64-encoded payloads are both accepted.
 2. **Targets check** — skips the message unless `node` matches one of this host's
-   own IPs (so each node only acts on its own incidents).
+   own IPs / hostname (so each node only acts on its own incidents).
 3. **Validates** (defence against spoofed/invalid input): pod name must match
-   `dvwa-[a-z0-9-]+`, port must be 4–5 digits, and a blocklist of
-   infrastructure ports is rejected so the responder can't be tricked into killing
-   cluster services.
-4. **Responds**: labels the pod `quarantine=true` (picked up by the NetworkPolicy),
-   then finds the PIDs listening on the reported port via `ss` and kills them
-   (`TERM`, then `KILL` after a grace period), skipping PID ≤ 1.
+   `dvwa-[a-z0-9-]+`, port must be 4–5 digits, `type` must be one of `ptrace`,
+   `mount`, `kmod`, and a blocklist of infrastructure ports is rejected so the
+   responder can't be tricked into killing cluster services. Rejected messages are
+   logged.
+4. **Dispatches** to the matching script, passing `pod port incident module`.
 5. **Deletes** the queue message.
 
-Supports a `DRY=1` dry-run mode that prints intended actions instead of executing
-them. The pod-delete step is present but commented out — quarantine + kill is the
-default, less destructive response.
+Every response script labels the pod `quarantine=true` (picked up by the
+NetworkPolicy) and then kills the attacker's processes. The rest is attack-specific:
+
+| `type` | Script | Attack-specific response |
+|--------|--------|--------------------------|
+| `mount` | `respond-mount.sh` | Removes cron entries referencing the pod IP and port from `/etc/crontab`, `/etc/cron.d` and `/var/spool/cron` (original saved as evidence first), then kills the host-side processes holding an established connection to `pod_ip:port` (children first, `TERM` then `KILL`). |
+| `kmod` | `respond-kmod.sh` | Copies the `.ko` file out of the container's filesystem into the evidence directory (read-only), kills the processes connected to `pod_ip:port` (the reverse shell), and `rmmod`s the module — only if the name is valid, it is loaded, and it is tainted out-of-tree (`O`), so in-tree modules are never removed. |
+| `ptrace` | `respond-ptrace.sh` | Kills the processes listening on the reported port (`TERM`, then `KILL`). |
+
+Evidence is written to `/var/lib/soc-responder/evidence/<incident>/`. PIDs ≤ 1 are
+never killed. Set `DRY=1` to print the intended actions instead of executing them.
 
 `quarantine-np.yaml` is the enforcement mechanism: a NetworkPolicy in the `dvwa`
 namespace selecting `quarantine: "true"` pods with empty Ingress/Egress rules,
@@ -317,11 +333,11 @@ only):
 
 - **`rev-shell.c` + `Makefile`** — a Loadable Kernel Module that uses
   `call_usermodehelper` to spawn a reverse shell from kernel space. Loading it
-  triggers the kernel-module escape chain (`rule3`). Edit `<container_ip>` before
+  triggers the kernel-module escape chain (`escape_kmod.kql`). Edit `<container_ip>` before
   building.
 - **`infect.c`** — a classic `ptrace` shellcode injector (`PTRACE_ATTACH` →
   `POKETEXT` → `SETREGS`) that injects an execve(`/bin/sh`) payload into a running
-  process. Triggers the process-injection chain (`rule5`).
+  process. Triggers the process-injection chain (`escape_ptrace.kql`).
 - **`process-injection.py`** — a trivial idle victim process to inject into.
 
 ---
@@ -353,10 +369,11 @@ values assigned by `Wazuh_Falco_Alerts.kql`:
 | `5-NodeConnection` / `…Failed` | container→node connection |
 | `6-HostListener` | listener on the node itself |
 
-A typical **hostfs-mount escape** chain (detected by `rule1`) therefore reads as:
-`0-KernelRecon` + `0-NetRecon` → `1-Shell` → `0-MountTableRead` → `3-HostFS` →
-`3-Chroot`, with `rule2` firing if it is followed by a `4-Persistence` or
-`5-Listener` stage.
+A typical **hostfs-mount escape** chain (detected by `escape_mount.kql`) therefore
+reads as: `0-KernelRecon` + `0-NetRecon` → `1-Shell` → `0-MountTableRead` →
+`3-HostFS` → `3-Chroot` → `4-Persistence`; the rule fires once the `1-Shell` →
+`3-HostFS` → `4-Persistence` ordering is satisfied. The kernel-module and ptrace
+rules fire on `3-KernelModule` and `3-ProcessInjection` respectively.
 
 ---
 
@@ -407,12 +424,16 @@ microk8s kubectl apply -k wazuh/envs/lab
 Update `lab_node_ips` in the Falco rules to your node addresses before deploying.
 
 **6. Sentinel analytics** — save `kql/Wazuh_Falco_Alerts.kql` as a function named
-`Wazuh_Falco_Alerts`, then create scheduled analytics rules from the correlation
-queries (`rule3`, `rule5`, and the combined hostfs/persistence rule).
+`Wazuh_Falco_Alerts`, then create one scheduled analytics rule per attack from
+`kql/escape_mount.kql`, `kql/escape_kmod.kql` and `kql/escape_ptrace.kql`. Attach a
+playbook to each that posts to Teams and enqueues the responder message (include
+`type`, `pod`, `node`, `port`, `incident` and, for `kmod`, `module`).
 
 **7. SOC responder** — on the node, export `QUEUE_URL` and `SAS` for your Azure
-Storage queue and run `./soc-responder.sh` (use `DRY=1 ./soc-responder.sh` first to
-verify without taking action).
+Storage queue and run `./auto-response/soc-responder.sh` (use
+`DRY=1 ./auto-response/soc-responder.sh` first to verify without taking action).
+The responder needs `curl`, `jq`, `ss` and `microk8s kubectl`, and must run as root
+(it kills processes, edits cron files and removes kernel modules).
 
 ---
 
@@ -426,7 +447,9 @@ verify without taking action).
   missed or noisy detections.
 - **Responder safety**: the port blocklist and pod-name regex in `soc-responder.sh`
   exist specifically to prevent a forged queue message from killing infrastructure —
-  keep them aligned with `lab_host_listen_allowed_ports`.
+  keep them aligned with `lab_host_listen_allowed_ports`. Each `respond-*.sh` also
+  re-validates what it acts on (pod IP format, module name pattern, out-of-tree
+  taint check).
 
 ---
 
