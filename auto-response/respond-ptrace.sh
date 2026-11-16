@@ -18,6 +18,6 @@ for pid in $pids; do
   [ "$pid" -gt 1 ] || continue
   log "incident $inc: killing PID $pid: $(tr '\0' ' ' </proc/$pid/cmdline 2>/dev/null)"
   run kill "$pid"; sleep 3
-  [ -d "/proc/$pid" ] && run kill P1+r4037=1B4F46\P1+r6B50=1B5B357E\P1+r6B4E=1B5B367E\P0+r4B31\P0+r4B33\-9 "$pid"
+  [ -d "/proc/$pid" ] && run kill -9 "$pid"
 done
 log "incident $inc: ready"
